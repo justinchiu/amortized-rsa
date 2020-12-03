@@ -1,0 +1,143 @@
+%
+% File emnlp2020.tex
+%
+%% Based on the style files for ACL 2020, which were
+%% Based on the style files for ACL 2018, NAACL 2018/19, which were
+%% Based on the style files for ACL-2015, with some improvements
+%%  taken from the NAACL-2016 style
+%% Based on the style files for ACL-2014, which were, in turn,
+%% based on ACL-2013, ACL-2012, ACL-2011, ACL-2010, ACL-IJCNLP-2009,
+%% EACL-2009, IJCNLP-2008...
+%% Based on the style files for EACL 2006 by 
+%%e.agirre@ehu.es or Sergi.Balari@uab.es
+%% and that of ACL 08 by Joakim Nivre and Noah Smith
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[hyperref]{emnlp2020}
+\usepackage{times}
+\usepackage{latexsym}
+\renewcommand{\UrlFont}{\ttfamily\small}
+
+\newcommand\qphi{q_\phi}
+\newcommand\pt{\tilde{p}}
+
+\makeatletter
+\def\blfootnote{\xdef\@thefnmark{}\@footnotetext}
+\makeatother
+
+% This is not strictly necessary, and may be commented out,
+% but it will improve the layout of the manuscript,
+% and will typically save some space.
+\usepackage{microtype}
+
+\usepackage{mystyle}
+\usepackage{subcaption} 
+
+% trellis
+\usepackage{tikz}%
+
+\usepackage{algorithm}
+\usepackage[noend]{algpseudocode}
+
+\usepackage{pgfplots}
+
+%% ADD BACK!!!!!!!!!!!!!!!!!
+\aclfinalcopy % Uncomment this line for the final submission
+\def\aclpaperid{3272} %  Enter the acl Paper ID here
+
+%\setlength\titlebox{5cm}
+% You can expand the titlebox if you need extra space
+% to show all the authors. Please do not make the titlebox
+% smaller than 5cm (the original size); we will check this
+% in the camera-ready version and ask you to change it back.
+
+\newcommand\BibTeX{B\textsc{ib}\TeX}
+\newcommand\Emit{\mathbf{O}}
+\newcommand\Trans{\mathbf{T}}
+
+\title{RSA Approximations}
+
+\author{Justin T. Chiu\\
+  Department of Computer Science \\
+  Cornell Tech \\
+  \texttt{jtc257@cornell.edu}\\
+}
+
+\date{}
+\raggedbottom
+
+\begin{document}
+\maketitle
+\begin{abstract}
+RSA is expensive.
+We evaluate some approximations.
+
+What is RSA even doing?
+Can we pull a principled approximation from a higher-level description?
+\end{abstract}
+
+
+\section{Introduction}
+
+Only need to talk about \citet{white2020learning} in the intro,
+other stuff isnt super relevant.
+
+RSA applies at the sequence level, which makes inference in pragmatic speakers difficult.
+Can get around this with listeners, since the distractor utterances do not have to be that good.
+A couple approaches in recent literature:
+1) Train an inference network to approximate the output of RSA \citep{white2020learning}.
+Compare to a sample and rerank from the literal speaker, not the amortized one.
+I guess that will be my contribution XD, plus a re-writing of their paper.
+
+\section{Related Work}
+Language drift papers, 
+https://proceedings.neurips.cc/paper/2017/file/70222949cc0db89ab32c9969754d4758-Paper.pdf
+http://proceedings.mlr.press/v70/jaques17a/jaques17a.pdf
+but really this is just bayes rule + VI.
+
+2) Incremental approximation using an autoregressive model
+\citep{cohngordon2018pragmatically}, I think? Not totally sure what this is doing.
+Could analyze bias?
+
+Defines RSA objective \citep{zaslavsky2020ratedistortion}, also Yuan.
+
+For listeners:
+1) Learns with margin-based approximation of pseudolikelihood \citep{gulordava2020dax}?
+2) Learns through approximate RSA procedure by subsampling utterances \citep{mcdowell2019learning}
+
+\section{Problem Setup}
+
+\section{Model}
+
+\section{Inference}
+\begin{equation}
+\begin{aligned}
+&\max_\phi \KL{\qphi(u) || p(u)}\\
+&= \max_\phi \Es{\qphi(u)}{\log \qphi(u) - \log p(u)}\\
+&= \max_\phi \Es{\qphi(u)}{\log \qphi(u) - \log \tilde{p}(u) + A}\\
+&= \max_\phi \Es{\qphi(u)}{\log \qphi(u) - \log \tilde{p}(u)}
+\end{aligned}
+\end{equation}
+where the log partition function, $A$, can be dropped from the maximization
+since the expectation of a constant is a constant,
+and all conditioning has been dropped for brevity.
+
+\section{Experiments}
+\subsection{}
+\subsection{}
+\subsection{}
+
+\section{Results}
+
+\section{Discussion}
+
+\bibliographystyle{acl_natbib}
+\bibliography{anthology}
+
+%\clearpage
+\appendix
+
+\section*{Appendix}
+\section{Blah}
+   
+\end{document}
