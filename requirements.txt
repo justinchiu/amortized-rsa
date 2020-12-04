@@ -1,0 +1,11 @@
+matplotlib
+torchsummary
+sklearn
+shapely
+aggdraw
+tqdm
+pandas
+nltk
+
+pytorch
+

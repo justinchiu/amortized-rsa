@@ -121,6 +121,7 @@ if __name__ == '__main__':
 
     # Pretrain Literal Listener
     if args.l0:
+        print("Training literal listener")
         if args.generalization:
             output_dir = './models/shapeworld/generalization/'+args.generalization+'/literal_listener_'
             output_files = [output_dir+'0.pt', output_dir+'1.pt']
@@ -181,6 +182,7 @@ if __name__ == '__main__':
 
     # Train Literal Speaker
     if args.s0:
+        print("Training literal speaker")
         for epoch in range(args.epochs):
             # Train one epoch
             train_metrics, _ = run(train_data, 'train', 's0', speaker, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, debug = args.debug)
@@ -220,6 +222,7 @@ if __name__ == '__main__':
     
     # Train Amortized Speaker
     if args.amortized:
+        print("Training amortized speaker")
         for epoch in range(args.epochs):
             # Train one epoch
             train_metrics, _ = run(train_data, 'train', 'amortized', speaker, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)

@@ -329,6 +329,7 @@ class LiteralSpeaker(nn.Module):
 
             # compute embeddings
             inputs = inputs @ self.embedding.weight
+            # TODO: check if inputs are relaxed
 
             for i in range(max_len-1):
                 self.gru.flatten_parameters()
@@ -376,6 +377,7 @@ class LanguageModel(nn.Module):
 
         # embed your sequences
         embed_seq = seq.cuda() @ self.embedding.weight
+        # TODO: check if inputs are relaxed
         
         # shape = (seq_len, batch, hidden_dim)
         feats_emb = torch.zeros(1, batch_size, self.hidden_size).to(embed_seq.device)
@@ -404,6 +406,7 @@ class LanguageModel(nn.Module):
             seq = seq.transpose(0, 1)
             # embed your sequences
             embed_seq = seq.cuda() @ self.embedding.weight
+            # TODO: check if seq is relaxed
 
             # shape = (seq_len, batch, hidden_dim)
             feats_emb = torch.zeros(1, batch_size, self.hidden_size).to(embed_seq.device)
@@ -447,6 +450,7 @@ class RNNEncoder(nn.Module):
 
         # embed your sequences
         embed_seq = seq.cuda() @ self.embedding.weight
+        # TODO: check if seq is relaxed
 
         packed = rnn_utils.pack_padded_sequence(
             embed_seq,
@@ -467,6 +471,7 @@ class Listener(nn.Module):
     
         super(Listener, self).__init__()
         self.embedding = embedding_module
+        # TODO: bidirectional, check accuracy on train/eval
         self.lang_model = RNNEncoder(self.embedding)
         self.feat_model = feat_model
         self.feat_size = feat_model.final_feat_dim

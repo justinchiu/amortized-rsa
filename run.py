@@ -85,7 +85,8 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
             internal_listener = torch.load('./models/'+dataset+'/literal_listener_0.pt')
         else:
             internal_listener = torch.load('./models/'+dataset+'/'+generalization+'_literal_listener_0.pt')
-    
+
+    # where does this come from...? going to assume it's p(u)
     language_model = torch.load('./models/'+dataset+'/language_model.pt')
 
     if split == 'train':
