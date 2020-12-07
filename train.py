@@ -2,6 +2,7 @@ import contextlib
 import random
 from collections import defaultdict
 import copy
+import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -41,6 +42,7 @@ if __name__ == '__main__':
     parser.add_argument('--cuda', action='store_true')
     parser.add_argument('--vocab', action='store_true', help='Generate new vocab file')
     parser.add_argument('--s0', action='store_true', help='Train literal speaker')
+    parser.add_argument('--sc', action='store_true', help='Train conditional speaker')
     parser.add_argument('--l0', action='store_true', help='Train literal listener')
     parser.add_argument('--amortized', action='store_true', help='Train amortized speaker')
     parser.add_argument('--activation', default=None)
@@ -50,6 +52,7 @@ if __name__ == '__main__':
     parser.add_argument('--save', default='metrics.csv', help='Where to save metrics')
     parser.add_argument('--debug', action='store_true', help='Print metrics on every epoch')
     parser.add_argument('--generalization', default=None)
+    parser.add_argument('--eval_only', action='store_true', help='Eval all models')
     args = parser.parse_args()
     
     if args.l0 and args.lr == None:
@@ -65,7 +68,8 @@ if __name__ == '__main__':
         else:
             data_dir = './data/shapeworld/generalization/'+args.generalization+'/reference-1000-'
             pretrain_data = [[data_dir+'0.npz', data_dir+'1.npz', data_dir+'2.npz', data_dir+'3.npz', data_dir+'4.npz'],[data_dir+'5.npz', data_dir+'6.npz', data_dir+'7.npz', data_dir+'8.npz', data_dir+'9.npz']]
-        train_data = [data_dir+'60.npz', data_dir+'61.npz', data_dir+'62.npz', data_dir+'63.npz', data_dir+'64.npz']
+        #train_data = [data_dir+'60.npz', data_dir+'61.npz', data_dir+'62.npz', data_dir+'63.npz', data_dir+'64.npz']
+        train_data = [f'{data_dir}{x}.npz' for x in range(30)]
         val_data = [data_dir+'65.npz', data_dir+'66.npz', data_dir+'67.npz', data_dir+'68.npz', data_dir+'69.npz']
         
     elif args.dataset == 'colors':
@@ -89,35 +93,75 @@ if __name__ == '__main__':
     else:
         vocab = torch.load('./models/'+args.dataset+'/vocab.pt')
     
-    # Initialize Speaker and Listener Model
+    # Initialize Speakers and Listener Model
+     
+    # literal speaker s0
     speaker_embs = nn.Embedding(len(vocab['w2i'].keys()), 50)
     speaker_vision = vision.Conv4()
-    if args.s0:
-        speaker = models.LiteralSpeaker(speaker_vision, speaker_embs)
-    else:
-        speaker = models.Speaker(speaker_vision, speaker_embs)
+    speaker = models.LiteralSpeaker(speaker_vision, speaker_embs)
+
+    # amortized speaker
+    a_speaker_embs = nn.Embedding(len(vocab['w2i'].keys()), 50)
+    a_speaker_vision = vision.Conv4()
+    a_speaker = models.Speaker(a_speaker_vision, a_speaker_embs)
+
+    # conditional speaker that does not see target
+    c_speaker_embs = nn.Embedding(len(vocab['w2i'].keys()), 50)
+    c_speaker_vision = vision.Conv4()
+    c_speaker = models.LiteralSpeaker(a_speaker_vision, a_speaker_embs, contextual=False, marginal=True)
+
+    # listener
     listener_embs = nn.Embedding(len(vocab['w2i'].keys()), 50)
     listener_vision = vision.Conv4()
     listener = models.Listener(listener_vision, listener_embs)
     if args.cuda:
         speaker = speaker.cuda()
         listener = listener.cuda()
-        
+        a_speaker = a_speaker.cuda()
+        c_speaker = c_speaker.cuda()
+
     # Optimization
     optimizer = optim.Adam(list(speaker.parameters())+list(listener.parameters()),lr=args.lr)
     loss = nn.CrossEntropyLoss()
 
-    # Initialize Metrics
-    metrics = init_metrics()
-    all_metrics = []
-        
-    # Optimization
-    optimizer = optim.Adam(list(speaker.parameters())+list(listener.parameters()),lr=args.lr)
-    loss = nn.CrossEntropyLoss()
+    if args.eval_only:
+        # num samples > 1 => sample and rerank?
+        NS = 1
+
+        # load all models (on cuda)
+        literal_listener = torch.load('./models/'+args.dataset+'/literal_listener_0.pt').cuda()
+        literal_listener_val = torch.load('./models/'+args.dataset+'/literal_listener_1.pt').cuda()
+        val_metrics, _ = run(val_data, 'test', 'l0', None, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, debug = args.debug)
+        print("Literal listener")
+        print(val_metrics)
+
+        language_model = torch.load('./models/'+args.dataset+'/language-model.pt').cuda()
+        val_metrics, _ = run(val_data, 'test', 'language_model', language_model, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, debug = args.debug)
+        print("Language model")
+        print(val_metrics)
+
+        literal_speaker = torch.load('./models/'+args.dataset+'/literal_speaker.pt').cuda()
+        val_metrics, _ = run(val_data, 'test', 'sample', literal_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, num_samples=NS, lmbd = args.lmbd, debug = args.debug)
+        print("Literal speaker")
+        print(val_metrics)
+
+        # dont run this...
+        conditional_speaker = torch.load('./models/'+args.dataset+'/conditional_speaker.pt').cuda()
+        val_metrics, _ = run(val_data, 'test', 'sample', conditional_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, num_samples=NS, lmbd = args.lmbd, debug = args.debug)
+        print("Conditional speaker")
+        print(val_metrics)
+
+        state_dict = torch.load('./models/'+args.dataset+'/amortized_speaker.pt').state_dict()
+        a_speaker.load_state_dict(state_dict)
+        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+        print("Amortized speaker")
+        print(val_metrics)
+
+        sys.exit()
 
     # Initialize Metrics
-    metrics = init_metrics()
     all_metrics = []
+    # ...?
 
     # Pretrain Literal Listener
     if args.l0:
@@ -132,7 +176,6 @@ if __name__ == '__main__':
         for file, output_file in zip(pretrain_data,output_files):
             # Reinitialize metrics, listener model, and optimizer
             metrics = init_metrics()
-            all_metrics = []
             listener_embs = nn.Embedding(len(vocab['w2i'].keys()), 50)
             listener_vision = vision.Conv4()
             listener = models.Listener(listener_vision, listener_embs)
@@ -172,7 +215,7 @@ if __name__ == '__main__':
             torch.save(literal_listener, output_file)
             
     # Load Literal Listener
-    if args.amortized or args.s0:
+    if args.amortized or args.s0 or args.sc:
         if args.generalization:
             literal_listener = torch.load('./models/shapeworld/generalization/'+args.generalization+'/literal_listener_0.pt')
             literal_listener_val = torch.load('./models/shapeworld/generalization/'+args.generalization+'/literal_listener_1.pt')
@@ -183,6 +226,7 @@ if __name__ == '__main__':
     # Train Literal Speaker
     if args.s0:
         print("Training literal speaker")
+        metrics = init_metrics()
         for epoch in range(args.epochs):
             # Train one epoch
             train_metrics, _ = run(train_data, 'train', 's0', speaker, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, debug = args.debug)
@@ -219,16 +263,62 @@ if __name__ == '__main__':
             torch.save(best_speaker, './models/shapeworld/generalization/'+args.generalization+'/literal_speaker.pt')
         else:
             torch.save(best_speaker, './models/'+args.dataset+'/literal_speaker.pt')
+
+    # Train Conditional Speaker
+    if args.sc:
+        print("Training conditional speaker")
+        metrics = init_metrics()
+        for epoch in range(args.epochs):
+            # Train one epoch
+            train_metrics, _ = run(train_data, 'train', 's0', c_speaker, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, debug = args.debug)
+            
+            # Validate
+            val_metrics, _ = run(val_data, 'val', 's0', c_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, debug = args.debug)
+            
+            # Update metrics, prepending the split name
+            for metric, value in train_metrics.items():
+                metrics['train_{}'.format(metric)].append(value)
+            for metric, value in val_metrics.items():
+                metrics['val_{}'.format(metric)].append(value)
+            metrics['current_epoch'] = epoch
+
+            # Use validation accuracy to choose the best model
+            is_best = val_metrics['acc'] > metrics['best_acc']
+            if is_best:
+                metrics['best_acc'] = val_metrics['acc']
+                metrics['best_loss'] = val_metrics['loss']
+                metrics['best_epoch'] = epoch
+                best_speaker = copy.deepcopy(c_speaker)
+
+            if args.debug:
+                print(metrics)
+
+            # Store metrics
+            metrics_last = {k: v[-1] if isinstance(v, list) else v
+                            for k, v in metrics.items()}
+            all_metrics.append(metrics_last)
+            pd.DataFrame(all_metrics).to_csv(args.save, index=False)
+
+        # Save the best model
+        if args.generalization:
+            torch.save(best_speaker, './models/shapeworld/generalization/'+args.generalization+'/conditional_speaker.pt')
+        else:
+            torch.save(best_speaker, './models/'+args.dataset+'/conditional_speaker.pt')
     
     # Train Amortized Speaker
     if args.amortized:
         print("Training amortized speaker")
+        # would be nice to initialize
+        state_dict = torch.load('./models/'+args.dataset+'/literal_speaker.pt').state_dict()
+        a_speaker.load_state_dict(state_dict)
+
+        metrics = init_metrics()
         for epoch in range(args.epochs):
             # Train one epoch
-            train_metrics, _ = run(train_data, 'train', 'amortized', speaker, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+            train_metrics, _ = run(train_data, 'train', 'amortized', a_speaker, literal_listener, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
             
             # Validate
-            val_metrics, _ = run(val_data, 'val', 'amortized', speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+            val_metrics, _ = run(val_data, 'val', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
 
             # Update metrics, prepending the split name
             for metric, value in train_metrics.items():
@@ -243,7 +333,7 @@ if __name__ == '__main__':
                 metrics['best_acc'] = val_metrics['acc']
                 metrics['best_loss'] = val_metrics['loss']
                 metrics['best_epoch'] = epoch
-                best_speaker = copy.deepcopy(speaker)
+                best_speaker = copy.deepcopy(a_speaker)
 
             if args.debug:
                 print(metrics)
@@ -265,8 +355,14 @@ if __name__ == '__main__':
                 if args.activation == 'multinomial':
                     torch.save(best_speaker, './models/'+args.dataset+'/reinforce_speaker.pt')
                 elif args.penalty == 'length':
-                    torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker.pt')
+                    torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_length.pt')
+                elif args.penalty == 'bayes':
+                    torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_bayes.pt')
+                elif args.penalty is None:
+                    torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_noprior.pt')
         except:
             random_file = str(np.random.randint(0,1000))
             print('failed saving, now saving at '+random_file+'.pt')
             torch.save(best_speaker, './models/'+random_file+'.pt')
+
+  

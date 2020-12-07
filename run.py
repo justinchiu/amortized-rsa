@@ -22,15 +22,18 @@ import data
 def compute_average_metrics(meters):
     metrics = {m: vs.avg for m, vs in meters.items()}
     metrics = {
-        m: v if isinstance(v, float) else v.item()
+        m: v.item() if torch.is_tensor(v) else v
         for m, v in metrics.items()
     }
     return metrics
 
-def _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, times):
-    seq_prob = []
-    for i,prob in enumerate(language_model.probability(lang,lang_length).cpu().numpy()):
-        seq_prob.append(np.exp(prob))
+def _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, times, text=None):
+    #seq_prob = []
+    #for i,prob in enumerate(language_model.probability(lang,lang_length).cpu().numpy()):
+        #seq_prob.append(np.exp(prob))
+    # cast to device just in case, since sampling seems to be done on cpu
+    seq_log_prob = language_model.probability(lang.to(y.device), lang_length.to(y.device)).sum()
+    num_toks = lang_length.sum().item()
         
     if ci_listeners != None:
         ci = []
@@ -43,21 +46,26 @@ def _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred
     outputs['lang'].append(lang)
     outputs['pred'].append(lis_pred)
     outputs['score'].append(lis_scores)
-    meters['loss'].append(this_loss.cpu().numpy())
-    meters['acc'].append(this_acc)
-    meters['prob'].append(seq_prob)
+    #meters['loss'].append(this_loss.cpu().numpy())
+    #meters['acc'].append(this_acc)
+    #meters['prob'].append(seq_prob)
+    meters['loss'].update(this_loss.item(), batch_size)
+    meters['acc'].update(this_acc, batch_size) # i guess this is already averaged? code is confusing.
+    meters['prob'].update(seq_log_prob / num_toks, num_toks)
+    #import pdb; pdb.set_trace()
     if ci_listeners != None:
-        meters['ci_acc'].append(ci)
-    meters['length'].append(lang_length.cpu().numpy()-2)
+        #meters['ci_acc'].append(ci)
+        meters['ci_acc'].update(sum(ci) / len(ci), len(ci) * batch_size)
+    #meters['length'].append(lang_length.cpu().numpy()-2)
     colors = 0
     for color in [4, 6, 9, 10, 11, 14]:
         colors += (lang == color).sum(dim=1).float()
     shapes = 0
     for shape in [7, 8, 12, 13]:
         shapes += (lang == shape).sum(dim=1).float()
-    meters['colors'].append(colors.cpu().numpy())
-    meters['shapes'].append(shapes.cpu().numpy())
-    meters['time'].append(times)
+    #meters['colors'].append(colors.cpu().numpy())
+    #meters['shapes'].append(shapes.cpu().numpy())
+    #meters['time'].append(times)
     return meters, outputs
 
 def _generate_utterance(token_1, token_2, batch_size, max_len):
@@ -86,8 +94,8 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
         else:
             internal_listener = torch.load('./models/'+dataset+'/'+generalization+'_literal_listener_0.pt')
 
-    # where does this come from...? going to assume it's p(u)
-    language_model = torch.load('./models/'+dataset+'/language_model.pt')
+    # comes from language_model.py. p(u)
+    language_model = torch.load('./models/'+dataset+'/language-model.pt')
 
     if split == 'train':
         for param in language_model.parameters():
@@ -120,10 +128,13 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
             ci_listeners = [torch.load(listener_dir+'2.pt'), torch.load(listener_dir+'3.pt'), torch.load(listener_dir+'4.pt'), torch.load(listener_dir+'5.pt'), torch.load(listener_dir+'6.pt'), torch.load(listener_dir+'7.pt'), torch.load(listener_dir+'8.pt'), torch.load(listener_dir+'9.pt'), torch.load(listener_dir+'10.pt')]
             for ci_listener in ci_listeners:
                 ci_listener.eval()
-            meters = {'loss':[], 'acc':[], 'prob':[], 'ci_acc':[], 'length':[], 'colors':[], 'shapes':[], 'time':[]}
+            # lol...?
+            #meters = {'loss':[], 'acc':[], 'prob':[], 'ci_acc':[], 'length':[], 'colors':[], 'shapes':[], 'time':[]}
+            meters = {'loss':util.AverageMeter(), 'acc':util.AverageMeter(), 'prob':util.AverageMeter(), 'ci_acc':util.AverageMeter(), 'length':util.AverageMeter(), 'colors':util.AverageMeter(), 'shapes':util.AverageMeter(), 'time':util.AverageMeter()}
         else:
             ci_listeners = None
-            meters = {'loss':[], 'acc':[], 'prob':[], 'length':[], 'colors':[], 'shapes':[], 'time':[]}
+            #meters = {'loss':[], 'acc':[], 'prob':[], 'length':[], 'colors':[], 'shapes':[], 'time':[]}
+            meters = {'loss':util.AverageMeter(), 'acc':util.AverageMeter(), 'prob':util.AverageMeter(), 'length':util.AverageMeter(), 'colors':util.AverageMeter(), 'shapes':util.AverageMeter(), 'time':util.AverageMeter()}
     else:
         if model_type == 's0' or model_type == 'language_model' or model_type == 'l0':
             measures = ['loss', 'acc']
@@ -140,6 +151,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                 dataloader = DataLoader(ShapeWorld(d, vocab), batch_size=batch_size, shuffle=False)
                 
             for batch_i, (img, y, lang) in enumerate(dataloader):
+                text = lang
                 batch_size = img.shape[0] 
                 
                 # Reformat inputs
@@ -218,10 +230,14 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                                 langs = lang
                                 lang_lengths = lang_length
                 elif model_type == 'amortized':
-                    if penalty == None:
+                    if penalty == None or penalty == "bayes":
                         lang, lang_length, eos_loss, lang_prob = speaker(img, y, activation = activation, tau = tau, length_penalty = False)
-                    else:
+                        #import pdb; pdb.set_trace()
+                    elif penalty == "length":
                         lang, lang_length, eos_loss, lang_prob = speaker(img, y, activation = activation, tau = tau, length_penalty = True)
+                    else:
+                        raise ValueError(f"Unknown penalty: {penalty}")
+                    #import pdb; pdb.set_trace()
                 elif model_type == 'test':
                     langs = torch.zeros(batch_size, max_len, len(vocab['w2i'].keys()))
                     for i in range(len(lang)):
@@ -252,7 +268,15 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                         # SGD step
                         this_loss.backward()
                         optimizer.step()
-                       
+                    """    
+                    # ...?
+                    if split == "train":   
+                        meters['loss'].update(this_loss, batch_size)
+                        meters['acc'].update(this_acc, batch_size)
+                    else:
+                        meters['loss'].append(this_loss)
+                        meters['acc'].append(this_acc)
+                    """
                     meters['loss'].update(this_loss, batch_size)
                     meters['acc'].update(this_acc, batch_size)
                 elif model_type == 's0' or model_type == 'language_model':
@@ -271,6 +295,15 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
 
                     meters['loss'].update(this_loss, batch_size)
                     meters['acc'].update(this_acc, batch_size)
+                    # ...?
+                    """
+                    if split == "train":   
+                        meters['loss'].update(this_loss, batch_size)
+                        meters['acc'].update(this_acc, batch_size)
+                    else:
+                        meters['loss'].append(this_loss)
+                        meters['acc'].append(this_acc)
+                    """
                 else:
                     if model_type == 'sample' or model_type == 'rsa' or model_type == 'test':
                         if not (model_type == 'sample' and num_samples == 1):
@@ -314,7 +347,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                             this_loss.backward()
                             optimizer.step()
                         if split == 'test':
-                            meters, outputs = _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, (end-start))
+                            meters, outputs = _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, (end-start), text=text)
                         else:
                             meters['loss'].update(this_loss, batch_size)
                             meters['acc'].update(this_acc, batch_size)
@@ -363,11 +396,20 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                                 # FIXME: Should we normalize in the binary case?
                                 policy_loss = (-lang_prob * returns).mean()
                                 this_loss = policy_loss
+                            elif penalty == "bayes":
+                                marg_lang_prob = language_model.probability(lang, lang_length)
+                                # average over batch
+                                Hq = lang_prob.sum(0).mean()
+                                Hp = marg_lang_prob.sum(0).mean()
+                                # ELBO
+                                this_loss = loss(lis_scores,y.long()) + Hq - Hp
+                                import pdb; pdb.set_trace()
                             else:
                                 this_loss = loss(lis_scores,y.long())
                             this_loss = this_loss + eos_loss * float(lmbd)
                         else:
                             this_loss = loss(lis_scores, y.long())
+                            import pdb; pdb.set_trace()
                             
                         lis_pred = lis_scores.argmax(1)
                         correct = (lis_pred == y)
@@ -377,9 +419,9 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                             # SGD step
                             this_loss.backward()
                             optimizer.step()
-                        
+
                         if split == 'test':
-                            meters, outputs = _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, (end-start))
+                            meters, outputs = _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, (end-start), text=text)
                         else:
                             meters['loss'].update(this_loss-eos_loss*float(lmbd), batch_size)
                             meters['lm loss'].update(eos_loss*float(lmbd), batch_size)
@@ -387,12 +429,15 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                             meters['length'].update(lang_length.float().mean(), batch_size)
         
     if split == 'test':
+        metrics = compute_average_metrics(meters)
+        """
         meters['loss'] = np.array(meters['loss']).tolist()
         meters['prob'] = [prob for sublist in meters['prob'] for prob in sublist]
         meters['length'] = [length for sublist in meters['length'] for length in sublist]
         meters['colors'] = [color for sublist in meters['colors'] for color in sublist]
         meters['shapes'] = [shape for sublist in meters['shapes'] for shape in sublist]
         metrics = meters
+        """
     else:
         metrics = compute_average_metrics(meters)
     if model_type == 'amortized':

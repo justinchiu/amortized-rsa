@@ -153,6 +153,8 @@ class Speaker(nn.Module):
             for j, pred in enumerate(predicted_npy):
                 if not done_sampling[j]:
                     lang_length[j] += 1
+                # jeez...activation can be None, which defaults to gumbel behaviour
+                # but fails here.
                 if pred == data.EOS_IDX and activation in {'gumbel', 'multinomial'}:
                     done_sampling[j] = True
 
@@ -196,6 +198,11 @@ class Speaker(nn.Module):
                 lang_prob_tensor[i, lang_length[i]:] = 0
             lang_prob_tensor = lang_prob_tensor[:, :max_lang_len]
             lang_prob = lang_prob_tensor.sum(1)
+        else:
+            # compute log prob of sampled language
+            # just recompute, easier
+            # probability of ALL tokens (zeroed out for things beyond lang_length)
+            lang_prob = self.probability(feats, lang_tensor, lang_length, targets)
         
         if length_penalty:
             # eos prob -> eos loss
@@ -225,11 +232,48 @@ class Speaker(nn.Module):
             texts.append(' '.join(text))
         return np.array(texts, dtype=np.unicode_)
 
+    def probability(self, feats, seq, length, y):
+        max_len = 40
+        batch_size = seq.shape[0]
+        seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
+        # reorder from (B,L,D) to (L,B,D)
+        seq = seq.transpose(0, 1)
+        # embed your sequences
+        embed_seq = seq.cuda() @ self.embedding.weight
+        # TODO: check if seq is relaxed
+         
+        feats_emb = self.embed_features(feats, y)
+        states = self.init_h(feats_emb)
+        # see if this broadcasts otherwise tile
+        states = states.unsqueeze(0)
+
+        inputs = embed_seq
+        prob = torch.zeros(batch_size)
+            
+        self.gru.flatten_parameters()
+        outputs, _ = self.gru(inputs, states)
+        outputs = outputs.squeeze(0)
+        outputs = self.outputs2vocab(outputs)
+        
+        # seq is a binary mask, then sum over 1-hot vocabulary
+        mask = torch.arange(max_len, device=length.device)[:,None] < length
+        masked_seq = seq * mask[:,:,None]
+        # sum over vocab and time, normalize by length.
+        log_probs = (outputs.log_softmax(-1) * masked_seq).sum(-1)
+
+        return log_probs
+
+
 
 class LiteralSpeaker(nn.Module):
-    def __init__(self, feat_model, embedding_module, hidden_size=100):
+    def __init__(
+        self, feat_model, embedding_module, hidden_size=100,
+        contextual=True,
+        marginal=False,
+    ):
         super(LiteralSpeaker, self).__init__()
-        self.contextual = True
+        self.contextual = contextual
+        self.marginal = marginal
         
         self.embedding = embedding_module
         self.embedding_dim = embedding_module.embedding_dim
@@ -239,15 +283,19 @@ class LiteralSpeaker(nn.Module):
         self.feat_size = feat_model.final_feat_dim
         self.gru = nn.GRU(self.embedding_dim, self.hidden_size)
         self.outputs2vocab = nn.Linear(self.hidden_size, self.vocab_size)
+        # is a linear combination of the indicator feature and the object
+        # embeddings enough?
         if self.contextual:
             self.init_h = nn.Linear(3 * (self.feat_size + 1), self.hidden_size)
+        elif self.marginal:
+            self.init_h = nn.Linear(3 * self.feat_size, self.hidden_size)
         else:
             self.init_h = nn.Linear(self.feat_size, self.hidden_size)
         
     def forward(self, feats, seq, length, y):
-        try: self.contextual
-        except:
-            self.contextual = False
+        #try: self.contextual
+        #except:
+            #self.contextual = False
         batch_size = seq.shape[0]
         if self.contextual:
             n_obj = feats.shape[1]
@@ -259,9 +307,18 @@ class LiteralSpeaker(nn.Module):
             targets_onehot = to_onehot(y)
             feats_and_targets = torch.cat((feats_emb, targets_onehot.unsqueeze(2)), 2)
             feats_emb = feats_and_targets.view(batch_size, -1)
+        elif self.marginal:
+            # this is JUST the target embedding, for p(u | o_t)
+            # we want p(u | o) = \sum_t p(u | t, o)p(t)
+            # feats_emb above embeds the context without target (LHS)
+            n_obj = feats.shape[1]
+            rest = feats.shape[2:]
+            feats_emb_flat = self.feat_model(feats.view(batch_size * n_obj, *rest))
+            # return fully flattened reps across all objects
+            feats_emb = feats_emb_flat.unsqueeze(1).view(batch_size, -1)
         else:
-            feats = torch.from_numpy(np.array([np.array(feat[y[idx],:,:,:].cpu()) for idx, feat in enumerate(feats)])).cuda()
-            feats_emb = self.feat_model(feats.cuda())
+            feats2 = torch.from_numpy(np.array([np.array(feat[y[idx],:,:,:].cpu()) for idx, feat in enumerate(raw_feats)])).cuda()
+            feats_emb = self.feat_model(feats2)
             
         # reorder from (B,L,D) to (L,B,D)
         seq = seq.transpose(0, 1).to(feats.device)
@@ -288,9 +345,9 @@ class LiteralSpeaker(nn.Module):
     
     def sample(self, feats, y, greedy=False):
         """Generate from image features using greedy search."""
-        try: self.contextual
-        except:
-            self.contextual = False
+        #try: self.contextual
+        #except:
+            #self.contextual = False
         with torch.no_grad():
             batch_size = feats.shape[0]
             if self.contextual:
@@ -303,9 +360,18 @@ class LiteralSpeaker(nn.Module):
                 targets_onehot = to_onehot(y)
                 feats_and_targets = torch.cat((feats_emb, targets_onehot.unsqueeze(2)), 2)
                 feats_emb = feats_and_targets.view(batch_size, -1)
+            elif self.marginal:
+                # this is JUST the target embedding, for p(u | o_t)
+                # we want p(u | o) = \sum_t p(u | t, o)p(t)
+                # feats_emb above embeds the context without target (LHS)
+                n_obj = feats.shape[1]
+                rest = feats.shape[2:]
+                feats_emb_flat = self.feat_model(feats.view(batch_size * n_obj, *rest))
+                # return fully flattened reps across all objects
+                feats_emb = feats_emb_flat.unsqueeze(1).view(batch_size, -1)
             else:
-                feats = torch.from_numpy(np.array([np.array(feat[y[idx],:,:,:].cpu()) for idx, feat in enumerate(feats)])).cuda()
-                feats_emb = self.feat_model(feats)
+                feats2 = torch.from_numpy(np.array([np.array(feat[y[idx],:,:,:].cpu()) for idx, feat in enumerate(raw_feats)])).cuda()
+                feats_emb = self.feat_model(feats2)
 
             # initialize hidden states using image features
             feats_emb = self.init_h(feats_emb)
@@ -355,6 +421,57 @@ class LiteralSpeaker(nn.Module):
             sampled_id = sampled.reshape(sampled.shape[0]*sampled.shape[1],-1).argmax(1).reshape(sampled.shape[0],sampled.shape[1])
             sampled_lengths = torch.tensor([np.count_nonzero(t) for t in sampled_id.cpu()], dtype=np.int)
         return sampled, sampled_lengths
+
+    def probability(self, feats, seq, length, y):
+        max_len = 40
+        batch_size = seq.shape[0]
+        seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
+        # reorder from (B,L,D) to (L,B,D)
+        seq = seq.transpose(0, 1)
+        # embed your sequences
+        embed_seq = seq.cuda() @ self.embedding.weight
+        # TODO: check if seq is relaxed
+
+        if self.contextual:
+            n_obj = feats.shape[1]
+            rest = feats.shape[2:]
+            feats = feats.view(batch_size * n_obj, *rest)
+            feats_emb_flat = self.feat_model(feats)
+            feats_emb = feats_emb_flat.unsqueeze(1).view(batch_size, n_obj, -1)
+            # Add targets
+            targets_onehot = to_onehot(y)
+            feats_and_targets = torch.cat((feats_emb, targets_onehot.unsqueeze(2)), 2)
+            feats_emb = feats_and_targets.view(batch_size, -1)
+        elif self.marginal:
+            # this is JUST the target embedding, for p(u | o_t)
+            # we want p(u | o) = \sum_t p(u | t, o)p(t)
+            # feats_emb above embeds the context without target (LHS)
+            n_obj = feats.shape[1]
+            rest = feats.shape[2:]
+            feats_emb_flat = self.feat_model(feats.view(batch_size * n_obj, *rest))
+            # return fully flattened reps across all objects
+            feats_emb = feats_emb_flat.unsqueeze(1).view(batch_size, -1)
+        else:
+            feats2 = torch.from_numpy(np.array([np.array(feat[y[idx],:,:,:].cpu()) for idx, feat in enumerate(raw_feats)])).cuda()
+            feats_emb = self.feat_model(feats2)
+            
+            inputs = embed_seq
+            states = feats_emb
+            prob = torch.zeros(batch_size)
+            
+        self.gru.flatten_parameters()
+        outputs, _ = self.gru(inputs, states)
+        outputs = outputs.squeeze(0)
+        outputs = self.outputs2vocab(outputs)
+        
+        # seq is a binary mask, then sum over 1-hot vocabulary
+        mask = torch.arange(max_len, device=length.device)[:,None] < length
+        masked_seq = seq * mask[:,:,None]
+        # sum over vocab and time, normalize by length.
+        log_probs = (outputs.log_softmax(-1) * masked_seq).sum(-1)
+
+        return log_probs
+
     
 class LanguageModel(nn.Module):
     def __init__(self, embedding_module, hidden_size=100):
@@ -397,7 +514,7 @@ class LanguageModel(nn.Module):
         lang_tensor = outputs_2d.view(batch_size, max_length, self.vocab_size)
         return lang_tensor
     
-    def probability(self, seq, length):
+    def probability_bad(self, seq, length):
         with torch.no_grad():
             max_len = 40
             batch_size = seq.shape[0]
@@ -426,6 +543,44 @@ class LanguageModel(nn.Module):
                     if word_idx < length[utterance_idx]:
                         prob[utterance_idx] = prob[utterance_idx]+idx_prob[word_idx-1,utterance_idx,word]/length[utterance_idx]
         return prob
+
+    def probability(self, seq, length):
+        max_len = 40
+        batch_size = seq.shape[0]
+        seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
+        # reorder from (B,L,D) to (L,B,D)
+        seq = seq.transpose(0, 1)
+        # embed your sequences
+        embed_seq = seq.cuda() @ self.embedding.weight
+        # TODO: check if seq is relaxed
+
+        # shape = (seq_len, batch, hidden_dim)
+        feats_emb = torch.zeros(1, batch_size, self.hidden_size).to(embed_seq.device)
+        
+        inputs = embed_seq
+        states = feats_emb
+        prob = torch.zeros(batch_size)
+        
+        self.gru.flatten_parameters()
+        outputs, _ = self.gru(inputs, states)
+        outputs = outputs.squeeze(0)
+        outputs = self.outputs2vocab(outputs)
+
+        """
+        idx_prob = F.log_softmax(outputs,dim=2).cpu().numpy()
+        for word_idx in range(1,seq.shape[0]):
+            for utterance_idx, word in enumerate(seq[word_idx].argmax(1)):
+                if word_idx < length[utterance_idx]:
+                    prob[utterance_idx] = prob[utterance_idx]+idx_prob[word_idx-1,utterance_idx,word]/length[utterance_idx]
+        """
+
+        # seq is a binary mask, then sum over 1-hot vocabulary
+        mask = torch.arange(max_len, device=length.device)[:,None] < length
+        masked_seq = seq * mask[:,:,None]
+        # sum over vocab and time, normalize by length.
+        log_probs = (outputs.log_softmax(-1) * masked_seq).sum(-1)
+
+        return log_probs
     
 class RNNEncoder(nn.Module):
     """
