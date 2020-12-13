@@ -395,6 +395,10 @@ class LiteralSpeaker(nn.Module):
             inputs = inputs @ self.embedding.weight
             # TODO: check if inputs are relaxed
 
+            B = y.shape[0]
+            done_sampling = np.array([False for _ in range(B)])
+            sampled_lens = np.zeros(B)
+
             for i in range(max_len-1):
                 self.gru.flatten_parameters()
                 outputs, states = self.gru(inputs, states)  # outputs: (L=1,B,H)
@@ -410,14 +414,30 @@ class LiteralSpeaker(nn.Module):
                     
                 predicted = predicted.transpose(0, 1)        # inputs: (L=1,B)
                 predicted = F.one_hot(predicted, num_classes=self.vocab_size).float()
-                inputs = predicted.to(feats.device) @ self.embedding.weight             # inputs: (L=1,B,E)
+                inputs = predicted.to(feats.device) @ self.embedding.weight
+                # inputs: (L=1,B,E)
                 
                 sampled = np.concatenate((sampled,predicted),axis = 0)
+                # whats the point of going from torch to numpy to torch?
+
+                # check for eos
+                finished = np.array(predicted[0,:,2] == 1)
+
+                # update lengths
+                sampled_lens[finished & ~done_sampling] = i + 1
+
+                # update done_sampling
+                done_sampling |= finished
+
+                if done_sampling.all():
+                    break
             
             sampled = torch.tensor(sampled).permute(1,0,2)
             
-            sampled_id = sampled.reshape(sampled.shape[0]*sampled.shape[1],-1).argmax(1).reshape(sampled.shape[0],sampled.shape[1])
-            sampled_lengths = torch.tensor([np.count_nonzero(t) for t in sampled_id.cpu()], dtype=np.int)
+            #sampled_id = sampled.reshape(sampled.shape[0]*sampled.shape[1],-1).argmax(1).reshape(sampled.shape[0],sampled.shape[1])
+            #sampled_lengths = torch.tensor([np.count_nonzero(t) for t in sampled_id.cpu()], dtype=np.int)
+            sampled_lengths = torch.tensor(sampled_lens, dtype=torch.long)
+
         return sampled, sampled_lengths
 
     def probability(self, feats, seq, length, y):
@@ -652,7 +672,6 @@ class Listener(nn.Module):
                 # Compute dot products
                 #scores = (scores+torch.einsum('ijh,ih->ij', (feats_emb, lang_bilinear)))
                 scores = scores+torch.mul(weights[:,:,i],torch.einsum('ijh,ih->ij', (feats_emb, lang_bilinear)))
-                
         else:
             # Embed features
             feats_emb = self.embed_features(feats)

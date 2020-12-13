@@ -433,8 +433,8 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                                 # ELBO
                                 nll = loss(lis_scores, y.long())
                                 kl = Hq - Hp
-                                this_loss = nll + kl
-                                #this_loss = nll - Hp
+                                #this_loss = nll + kl
+                                this_loss = nll - Hp
                                 #import pdb; pdb.set_trace()
 
                             else:

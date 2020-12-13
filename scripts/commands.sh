@@ -18,6 +18,7 @@ function s0 {
 function al {
     python train.py --dataset shapeworld --amortized --activation gumbel \
         --lr 0.001 \
+        --epochs 25 \
         --cuda --debug \
         --penalty length --batch_size 128 \
         | tee amortized-length.log
@@ -27,6 +28,7 @@ function ab {
     python train.py --dataset shapeworld --amortized --activation gumbel \
         --lr 0.001 \
         --batch_size 128 \
+        --epochs 25 \
         --cuda --debug \
         --penalty bayes \
         | tee amortized-bayes.log
