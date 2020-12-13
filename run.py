@@ -96,11 +96,19 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
 
     # comes from language_model.py. p(u)
     language_model = torch.load('./models/'+dataset+'/language-model.pt')
+    # load pretrained literal speaker
+    s0 = torch.load('./models/'+dataset+'/literal_speaker.pt')
 
     if split == 'train':
         for param in language_model.parameters():
             param.requires_grad = False
         language_model.train()
+
+        # literal speaker for amortized speaker
+        for param in s0.parameters():
+            param.requires_grad = False
+        s0.train()
+
         if model_type == 's0' or model_type == 'language_model':
             speaker.train()
         elif model_type == 'l0':
@@ -114,6 +122,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
         context = contextlib.suppress()
     else:
         language_model.eval()
+        s0.eval()
         if model_type != 'l0' and model_type != 'oracle' and model_type != 'test':
             speaker.eval()
         if model_type != 's0' and model_type != 'language_model':
@@ -232,7 +241,6 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                 elif model_type == 'amortized':
                     if penalty == None or penalty == "bayes":
                         lang, lang_length, eos_loss, lang_prob = speaker(img, y, activation = activation, tau = tau, length_penalty = False)
-                        #import pdb; pdb.set_trace()
                     elif penalty == "length":
                         lang, lang_length, eos_loss, lang_prob = speaker(img, y, activation = activation, tau = tau, length_penalty = True)
                     else:
@@ -282,9 +290,17 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                 elif model_type == 's0' or model_type == 'language_model':
                     lang_out = lang_out[:, :-1].contiguous()
                     lang = lang[:, 1:].contiguous()
-                    lang_out = lang_out.view(batch_size*lang_out.size(1), len(vocab['w2i'].keys()))
-                    lang = lang.long().view(batch_size*lang.size(1), len(vocab['w2i'].keys()))
-                    this_loss = loss(lang_out.cuda(), torch.max(lang, 1)[1].cuda())
+                    # this seems correct
+
+                    V = len(vocab['w2i'].keys())
+                    # compute NLL
+                    nll = -(lang_out.log_softmax(-1) * lang).sum(-1)
+                    mask = torch.arange(lang.shape[1], device=length.device)[None] < length[:,None]
+                    this_loss = (nll * mask).sum(-1).mean()
+
+                    #lang_out = lang_out.view(batch_size*lang_out.size(1), )
+                    #lang = lang.long().view(batch_size*lang.size(1), len(vocab['w2i'].keys()))
+                    #this_loss = loss(lang_out.cuda(), torch.max(lang, 1)[1].cuda())
 
                     if split == 'train':
                         # SGD step
@@ -360,6 +376,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                             lis_scores = listener(img, lang, lang_length, average=True)
                         else:
                             lang_onehot = lang.argmax(2)
+                            # lang_onehot does not require grad
                             if activation != 'gumbel' and activation != None:
                                 lang = F.one_hot(lang_onehot, num_classes = len(vocab['w2i'].keys())).cuda().float()
                             lang_length = []
@@ -368,6 +385,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                             lang_length = torch.tensor(lang_length).cuda()
                             end = time.time()
                             lis_scores = listener(img, lang, lang_length)
+                            #import pdb; pdb.set_trace()
                             
                         # Evaluate loss and accuracy
                         if model_type == 'l0':
@@ -378,7 +396,8 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                                 # DETERMINISTIC REWARD
                                 #  lis_choices = lis_scores.argmax(1)  # deterministically choose best
                                 # STOCHASTIC REWARD
-                                lis_choices = torch.distributions.Categorical(probs=lis_scores).sample()
+                                #lis_choices = torch.distributions.Categorical(probs=lis_scores).sample()
+                                lis_choices = torch.distributions.Categorical(logits=lis_scores).sample()
                                 returns = lis_choices == y
                                 # No reward for saying nothing
                                 not_zero = lang_length > 2
@@ -397,19 +416,33 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                                 policy_loss = (-lang_prob * returns).mean()
                                 this_loss = policy_loss
                             elif penalty == "bayes":
+                                # dont use marginal language model!
                                 marg_lang_prob = language_model.probability(lang, lang_length)
+
+                                # ideally you would loop over contexts,
+                                # but i think the model is pretty broken and that wont do anything
+                                s0_lang_prob = s0.probability(img, lang, lang_length, y)
+
+                                #print((lang_prob - s0_lang_prob).max())
+
                                 # average over batch
                                 Hq = lang_prob.sum(0).mean()
-                                Hp = marg_lang_prob.sum(0).mean()
+                                #Hp = marg_lang_prob.sum(0).mean()
+                                Hp = s0_lang_prob.sum(0).mean()
+
                                 # ELBO
-                                this_loss = loss(lis_scores,y.long()) + Hq - Hp
-                                import pdb; pdb.set_trace()
+                                nll = loss(lis_scores, y.long())
+                                kl = Hq - Hp
+                                this_loss = nll + kl
+                                #this_loss = nll - Hp
+                                #import pdb; pdb.set_trace()
+
                             else:
+                                # no penalty or length penalty
                                 this_loss = loss(lis_scores,y.long())
                             this_loss = this_loss + eos_loss * float(lmbd)
                         else:
                             this_loss = loss(lis_scores, y.long())
-                            import pdb; pdb.set_trace()
                             
                         lis_pred = lis_scores.argmax(1)
                         correct = (lis_pred == y)
@@ -418,7 +451,12 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                         if split == 'train':
                             # SGD step
                             this_loss.backward()
+                            meh = speaker.embedding.weight.clone().detach()
                             optimizer.step()
+                            #print((speaker.embedding.weight - meh).abs().max())
+                            #print((speaker.embedding.weight - meh).mean())
+                            #print((speaker.embedding.weight - meh).abs().median())
+                            #import pdb; pdb.set_trace()
 
                         if split == 'test':
                             meters, outputs = _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred, lis_scores, this_loss, this_acc, batch_size, ci_listeners, language_model, (end-start), text=text)

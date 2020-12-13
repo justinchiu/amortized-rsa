@@ -8,15 +8,16 @@ function lm {
 }
 
 function l0 {
-    python train.py --dataset shapeworld --l0 --cuda --debug | tee l0.log
+    python train.py --dataset shapeworld --l0 --cuda --debug --lr 0.001 | tee l0.log
 }
 
 function s0 {
-    python train.py --dataset shapeworld --s0 --cuda --debug | tee s0.log
+    python train.py --dataset shapeworld --s0 --cuda --debug --lr 0.001 | tee s0.log
 }
 
 function al {
     python train.py --dataset shapeworld --amortized --activation gumbel \
+        --lr 0.001 \
         --cuda --debug \
         --penalty length --batch_size 128 \
         | tee amortized-length.log
@@ -24,10 +25,11 @@ function al {
 
 function ab {
     python train.py --dataset shapeworld --amortized --activation gumbel \
-        --lr 0.001 --batch_size 128 \
+        --lr 0.001 \
+        --batch_size 128 \
         --cuda --debug \
-        --penalty bayes #\
-        #| tee amortized-bayes.log
+        --penalty bayes \
+        | tee amortized-bayes.log
 }
 
 function ev {

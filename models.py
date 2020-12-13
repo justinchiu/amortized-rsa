@@ -156,7 +156,7 @@ class Speaker(nn.Module):
                 # jeez...activation can be None, which defaults to gumbel behaviour
                 # but fails here.
                 if pred == data.EOS_IDX and activation in {'gumbel', 'multinomial'}:
-                    done_sampling[j] = True
+                   done_sampling[j] = True
 
             # (1, batch_size, n_vocab) X (n_vocab, h) -> (1, batch_size, h)
             inputs = (predicted_onehot.unsqueeze(0)) @ self.embedding.weight
@@ -233,9 +233,9 @@ class Speaker(nn.Module):
         return np.array(texts, dtype=np.unicode_)
 
     def probability(self, feats, seq, length, y):
-        max_len = 40
-        batch_size = seq.shape[0]
-        seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
+        #max_len = 40
+        batch_size, max_len, V = seq.shape
+        #seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
         # reorder from (B,L,D) to (L,B,D)
         seq = seq.transpose(0, 1)
         # embed your sequences
@@ -248,7 +248,6 @@ class Speaker(nn.Module):
         states = states.unsqueeze(0)
 
         inputs = embed_seq
-        prob = torch.zeros(batch_size)
             
         self.gru.flatten_parameters()
         outputs, _ = self.gru(inputs, states)
@@ -257,12 +256,11 @@ class Speaker(nn.Module):
         
         # seq is a binary mask, then sum over 1-hot vocabulary
         mask = torch.arange(max_len, device=length.device)[:,None] < length
-        masked_seq = seq * mask[:,:,None]
+        masked_seq = (seq * mask[:,:,None]).detach()
         # sum over vocab and time, normalize by length.
         log_probs = (outputs.log_softmax(-1) * masked_seq).sum(-1)
 
-        return log_probs
-
+        return log_probs[:length.max()]
 
 
 class LiteralSpeaker(nn.Module):
@@ -423,9 +421,10 @@ class LiteralSpeaker(nn.Module):
         return sampled, sampled_lengths
 
     def probability(self, feats, seq, length, y):
-        max_len = 40
-        batch_size = seq.shape[0]
-        seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
+        #max_len = 40
+        #batch_size = seq.shape[0]
+        batch_size, max_len, V = seq.shape
+        #seq = F.pad(seq,(0,0,0,(max_len-seq.shape[1]))).float()
         # reorder from (B,L,D) to (L,B,D)
         seq = seq.transpose(0, 1)
         # embed your sequences
@@ -455,9 +454,9 @@ class LiteralSpeaker(nn.Module):
             feats2 = torch.from_numpy(np.array([np.array(feat[y[idx],:,:,:].cpu()) for idx, feat in enumerate(raw_feats)])).cuda()
             feats_emb = self.feat_model(feats2)
             
-            inputs = embed_seq
-            states = feats_emb
-            prob = torch.zeros(batch_size)
+        inputs = embed_seq
+        states = self.init_h(feats_emb)[None]
+        prob = torch.zeros(batch_size)
             
         self.gru.flatten_parameters()
         outputs, _ = self.gru(inputs, states)
@@ -467,7 +466,7 @@ class LiteralSpeaker(nn.Module):
         # seq is a binary mask, then sum over 1-hot vocabulary
         mask = torch.arange(max_len, device=length.device)[:,None] < length
         masked_seq = seq * mask[:,:,None]
-        # sum over vocab and time, normalize by length.
+        # sum over vocab (one-hot or zeroed out)
         log_probs = (outputs.log_softmax(-1) * masked_seq).sum(-1)
 
         return log_probs
@@ -565,14 +564,6 @@ class LanguageModel(nn.Module):
         outputs, _ = self.gru(inputs, states)
         outputs = outputs.squeeze(0)
         outputs = self.outputs2vocab(outputs)
-
-        """
-        idx_prob = F.log_softmax(outputs,dim=2).cpu().numpy()
-        for word_idx in range(1,seq.shape[0]):
-            for utterance_idx, word in enumerate(seq[word_idx].argmax(1)):
-                if word_idx < length[utterance_idx]:
-                    prob[utterance_idx] = prob[utterance_idx]+idx_prob[word_idx-1,utterance_idx,word]/length[utterance_idx]
-        """
 
         # seq is a binary mask, then sum over 1-hot vocabulary
         mask = torch.arange(max_len, device=length.device)[:,None] < length
@@ -673,5 +664,7 @@ class Listener(nn.Module):
             lang_bilinear = self.bilinear(lang_emb)
 
             # Compute dot products
-            scores = F.softmax(torch.einsum('ijh,ih->ij', (feats_emb, lang_bilinear)))
+            # this is a bug. should be in log space
+            #scores = F.softmax(torch.einsum('ijh,ih->ij', (feats_emb, lang_bilinear)))
+            scores = torch.einsum('ijh,ih->ij', (feats_emb, lang_bilinear))
         return scores

@@ -121,7 +121,23 @@ if __name__ == '__main__':
         c_speaker = c_speaker.cuda()
 
     # Optimization
-    optimizer = optim.Adam(list(speaker.parameters())+list(listener.parameters()),lr=args.lr)
+     
+    # figure out which parameters to optimize
+    if args.l0:
+        parameters = list(listener.parameters())
+    elif args.s0:
+        parameters = list(speaker.parameters())
+    elif args.sc:
+        parameters = list(c_speaker.parameters())
+    elif args.amortized:
+        parameters = list(a_speaker.parameters())
+    elif args.eval_only:
+        # dummy
+        parameters = list(c_speaker.parameters())
+    else:
+        raise ValueError("Unknown model type")
+
+    optimizer = optim.Adam(parameters, lr=args.lr)
     loss = nn.CrossEntropyLoss()
 
     if args.eval_only:
