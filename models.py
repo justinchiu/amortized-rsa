@@ -191,6 +191,7 @@ class Speaker(nn.Module):
         # Trim max length
         max_lang_len = lang_length.max()
         lang_tensor = lang_tensor[:, :max_lang_len, :]
+        #import pdb; pdb.set_trace()
         
         if activation == 'multinomial':
             lang_prob_tensor = torch.cat(lang_prob, 1)
@@ -436,7 +437,9 @@ class LiteralSpeaker(nn.Module):
             
             #sampled_id = sampled.reshape(sampled.shape[0]*sampled.shape[1],-1).argmax(1).reshape(sampled.shape[0],sampled.shape[1])
             #sampled_lengths = torch.tensor([np.count_nonzero(t) for t in sampled_id.cpu()], dtype=np.int)
-            sampled_lengths = torch.tensor(sampled_lens, dtype=torch.long)
+            #import pdb; pdb.set_trace()
+            sampled_lengths = torch.tensor(sampled_lens, dtype=torch.long) + 1
+            # need the + 1 for BOS
 
         return sampled, sampled_lengths
 

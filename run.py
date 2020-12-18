@@ -41,7 +41,7 @@ def _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred
             correct = (ci_listener(img,lang,lang_length).argmax(1)==y)
             acc = correct.float().mean().item()
             ci.append(acc)
-            
+
     lang = lang.argmax(2)
     outputs['lang'].append(lang)
     outputs['pred'].append(lis_pred)
@@ -57,6 +57,7 @@ def _collect_outputs(meters, outputs, vocab, img, y, lang, lang_length, lis_pred
         #meters['ci_acc'].append(ci)
         meters['ci_acc'].update(sum(ci) / len(ci), len(ci) * batch_size)
     #meters['length'].append(lang_length.cpu().numpy()-2)
+    meters["length"].update((lang_length - 2).float().mean().item(), lang_length.nelement())
     colors = 0
     for color in [4, 6, 9, 10, 11, 14]:
         colors += (lang == color).sum(dim=1).float()

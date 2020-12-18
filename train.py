@@ -171,19 +171,19 @@ if __name__ == '__main__':
 
         state_dict = torch.load('./models/'+args.dataset+'/amortized_speaker_length.pt').state_dict()
         a_speaker.load_state_dict(state_dict)
-        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = "gumbel", dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
         print("Amortized speaker length")
         print(val_metrics)
 
         state_dict = torch.load('./models/'+args.dataset+'/amortized_speaker_bayes.pt').state_dict()
         a_speaker.load_state_dict(state_dict)
-        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = "gumbel", dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
         print("Amortized speaker bayes")
         print(val_metrics)
 
         state_dict = torch.load('./models/'+args.dataset+'/amortized_speaker_map.pt').state_dict()
         a_speaker.load_state_dict(state_dict)
-        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = "gumbel", dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
         print("Amortized speaker map")
         print(val_metrics)
 
