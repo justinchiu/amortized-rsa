@@ -181,6 +181,12 @@ if __name__ == '__main__':
         print("Amortized speaker bayes")
         print(val_metrics)
 
+        state_dict = torch.load('./models/'+args.dataset+'/amortized_speaker_map.pt').state_dict()
+        a_speaker.load_state_dict(state_dict)
+        val_metrics, _ = run(val_data, 'test', 'amortized', a_speaker, literal_listener_val, optimizer, loss, vocab, args.batch_size, args.cuda, lmbd = args.lmbd, activation = args.activation, dataset = args.dataset, penalty = args.penalty, tau = args.tau, debug = args.debug)
+        print("Amortized speaker map")
+        print(val_metrics)
+
         sys.exit()
 
     # Initialize Metrics
@@ -382,6 +388,8 @@ if __name__ == '__main__':
                     torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_length.pt')
                 elif args.penalty == 'bayes':
                     torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_bayes.pt')
+                elif args.penalty == 'map':
+                    torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_map.pt')
                 elif args.penalty is None:
                     torch.save(best_speaker, './models/'+args.dataset+'/amortized_speaker_noprior.pt')
         except:

@@ -98,6 +98,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
     language_model = torch.load('./models/'+dataset+'/language-model.pt')
     # load pretrained literal speaker
     s0 = torch.load('./models/'+dataset+'/literal_speaker.pt')
+    sc = torch.load('./models/'+dataset+'/conditional_speaker.pt')
 
     if split == 'train':
         for param in language_model.parameters():
@@ -108,6 +109,9 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
         for param in s0.parameters():
             param.requires_grad = False
         s0.train()
+        for param in sc.parameters():
+            param.requires_grad = False
+        sc.train()
 
         if model_type == 's0' or model_type == 'language_model':
             speaker.train()
@@ -123,6 +127,7 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
     else:
         language_model.eval()
         s0.eval()
+        sc.eval()
         if model_type != 'l0' and model_type != 'oracle' and model_type != 'test':
             speaker.eval()
         if model_type != 's0' and model_type != 'language_model':
@@ -238,8 +243,10 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                             except:
                                 langs = lang
                                 lang_lengths = lang_length
+                    import pdb; pdb.set_trace()
+                    # whats going on with rsa
                 elif model_type == 'amortized':
-                    if penalty == None or penalty == "bayes":
+                    if penalty == None or penalty == "bayes" or penalty == "map":
                         lang, lang_length, eos_loss, lang_prob = speaker(img, y, activation = activation, tau = tau, length_penalty = False)
                     elif penalty == "length":
                         lang, lang_length, eos_loss, lang_prob = speaker(img, y, activation = activation, tau = tau, length_penalty = True)
@@ -415,26 +422,28 @@ def run(data_file, split, model_type, speaker, listener, optimizer, loss, vocab,
                                 # FIXME: Should we normalize in the binary case?
                                 policy_loss = (-lang_prob * returns).mean()
                                 this_loss = policy_loss
-                            elif penalty == "bayes":
+                            elif penalty == "bayes" or penalty == "map":
                                 # dont use marginal language model!
                                 marg_lang_prob = language_model.probability(lang, lang_length)
 
                                 # ideally you would loop over contexts,
                                 # but i think the model is pretty broken and that wont do anything
                                 s0_lang_prob = s0.probability(img, lang, lang_length, y)
+                                sc_lang_prob = sc.probability(img, lang, lang_length, y)
 
                                 #print((lang_prob - s0_lang_prob).max())
 
                                 # average over batch
                                 Hq = lang_prob.sum(0).mean()
                                 #Hp = marg_lang_prob.sum(0).mean()
-                                Hp = s0_lang_prob.sum(0).mean()
+                                #Hp = s0_lang_prob.sum(0).mean()
+                                Hp = sc_lang_prob.sum(0).mean()
 
                                 # ELBO
                                 nll = loss(lis_scores, y.long())
                                 kl = Hq - Hp
                                 #this_loss = nll + kl
-                                this_loss = nll - Hp
+                                this_loss = nll - Hp if penalty == "map" else nll + kl
                                 #import pdb; pdb.set_trace()
 
                             else:
